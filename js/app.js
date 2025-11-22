@@ -1,5 +1,3 @@
-
-
   // Wait for jsPDF to load
   window.addEventListener('load', function() {
   initializeApp();
@@ -19,6 +17,10 @@
   // DOM elements
   const urlInput = document.getElementById('url');
   const intervalInput = document.getElementById('interval');
+  const emailInput = document.getElementById('email');
+  const emailServiceSelect = document.getElementById('emailService');
+  const resendApiKeyInput = document.getElementById('resendApiKey');
+  const fromEmailInput = document.getElementById('fromEmail');
   const startBtn = document.getElementById('startBtn');
   const stopBtn = document.getElementById('stopBtn');
   const resetBtn = document.getElementById('resetBtn');
@@ -563,6 +565,132 @@
   nextPing.textContent = nextTime.toLocaleTimeString();
 }
 
+  // Send email notification
+  async function sendEmailNotification(error) {
+  const email = emailInput.value.trim();
+  const emailService = emailServiceSelect.value;
+
+  if (!email) return;
+
+  const subject = `🚨 Backend Down Alert - ${urlInput.value}`;
+  const body = `
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+    .alert-box { background: #fee2e2; border-left: 4px solid #dc2626; padding: 15px; margin: 20px 0; }
+    .stats { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
+    .stat-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #e5e7eb; }
+    .footer { text-align: center; color: #6b7280; font-size: 12px; margin-top: 30px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🚨 Backend Down Alert</h1>
+      <p>Your backend is experiencing issues</p>
+    </div>
+    <div class="content">
+      <div class="alert-box">
+        <strong>⚠️ Alert Details:</strong>
+        <p><strong>Backend URL:</strong> ${urlInput.value}</p>
+        <p><strong>Error:</strong> ${error}</p>
+        <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+      </div>
+
+      <div class="stats">
+        <h3>Current Statistics</h3>
+        <div class="stat-row">
+          <span>Total Pings:</span>
+          <strong>${stats.total}</strong>
+        </div>
+        <div class="stat-row">
+          <span>Failed Pings:</span>
+          <strong style="color: #dc2626;">${stats.failed}</strong>
+        </div>
+        <div class="stat-row">
+          <span>Success Rate:</span>
+          <strong>${stats.total > 0 ? ((stats.success / stats.total) * 100).toFixed(1) : 0}%</strong>
+        </div>
+      </div>
+
+      <p style="margin-top: 20px;">
+        <strong>Action Required:</strong> Please check your backend service immediately.
+      </p>
+    </div>
+    <div class="footer">
+      <p>This is an automated alert from Backend Pinger Pro</p>
+      <p>Generated at ${new Date().toLocaleString()}</p>
+    </div>
+  </div>
+</body>
+</html>
+        `.trim();
+
+  if (emailService === 'mailto') {
+  // Use mailto link (opens user's email client)
+  const textBody = `
+Backend Monitoring Alert
+
+Your backend is experiencing issues!
+
+Details:
+- Backend URL: ${urlInput.value}
+- Error: ${error}
+- Time: ${new Date().toLocaleString()}
+- Total Failed Pings: ${stats.failed}
+- Success Rate: ${stats.total > 0 ? ((stats.success / stats.total) * 100).toFixed(1) : 0}%
+
+This is an automated alert from Backend Pinger Pro.
+          `.trim();
+
+  const mailtoLink = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(textBody)}`;
+  window.open(mailtoLink, '_blank');
+  addLog(`Email alert opened in your email client`, 'info');
+} else if (emailService === 'resend') {
+  // Use Resend API
+  const apiKey = resendApiKeyInput.value.trim();
+  const fromEmail = fromEmailInput.value.trim() || 'onboarding@resend.dev';
+
+  if (!apiKey) {
+  addLog(`Resend API key not provided. Please add your API key`, 'warning');
+  return;
+}
+
+  try {
+  const response = await fetch('https://api.resend.com/emails', {
+  method: 'POST',
+  headers: {
+  'Authorization': `Bearer ${apiKey}`,
+  'Content-Type': 'application/json'
+},
+  body: JSON.stringify({
+  from: fromEmail,
+  to: [email],
+  subject: subject,
+  html: body
+})
+});
+
+  if (!response.ok) {
+  const errorData = await response.json();
+  throw new Error(errorData.message || `HTTP ${response.status}`);
+}
+
+  const result = await response.json();
+  addLog(`✉️ Email alert sent successfully to ${email}`, 'success');
+  console.log('Resend response:', result);
+} catch (emailError) {
+  addLog(`Failed to send email: ${emailError.message}`, 'error');
+  console.error('Resend error:', emailError);
+}
+}
+}
+
   // Ping backend
   async function pingBackend() {
   const url = urlInput.value.trim();
@@ -596,7 +724,11 @@
 
 } catch (error) {
   stats.failed++;
-  addLog(`Ping failed: ${error.message}`, 'error');
+  const errorMsg = error.message || 'Unknown error';
+  addLog(`Ping failed: ${errorMsg}`, 'error');
+
+  // Send email notification on failure
+  await sendEmailNotification(errorMsg);
 }
 
   lastPing.textContent = new Date().toLocaleTimeString();
@@ -739,7 +871,6 @@
   alert('No logs found for this time range.');
   return;
 }
-
 
   // Calculate statistics for filtered logs
   const exportStats = {
