@@ -3,7 +3,7 @@ window.addEventListener('load', function() {
   initializeApp();
 });
 
-// GLOBAL: Auto-start function (moved outside for scope access)
+// GLOBAL: Auto-start function (ADD THIS FUNCTION)
 function autoStartPinger(initializeState) {
   // Use passed state to avoid re-init
   const { urlInput, intervalInput, startBtn, stopBtn, statusBanner, statusText, addLog, updateNextPing, pingBackend } = initializeState;
@@ -41,9 +41,9 @@ function initializeApp() {
   let intervalId = null;
   let logs = [];
   let stats = { total: 0, success: 0, failed: 0, responseTimes: [] };
-  window.pingerIntervalId = null; // Global for auto-stop
+  window.pingerIntervalId = null;
 
-  // DOM elements (unchanged)
+  // DOM elements
   const urlInput = document.getElementById('url');
   const intervalInput = document.getElementById('interval');
   const emailInput = document.getElementById('email');
@@ -73,30 +73,31 @@ function initializeApp() {
   const uptimeSuccess = document.getElementById('uptimeSuccess');
   const uptimeFailed = document.getElementById('uptimeFailed');
 
-  // Pass state to auto-starter
-  const initState = {
-    urlInput, intervalInput, startBtn, stopBtn, statusBanner, statusText,
-    addLog, updateNextPing, pingBackend // Functions from below
-  };
-
-  // Auto-start after 2s (now with state)
-  setTimeout(() => autoStartPinger(initState), 2000);
-
-  // Load saved data (unchanged)
+  // Load saved data
   function loadData() {
     const savedLogs = localStorage.getItem('pingerLogs');
     const savedStats = localStorage.getItem('pingerStats');
-    if (savedLogs) { logs = JSON.parse(savedLogs); renderLogs(); }
-    if (savedStats) { stats = JSON.parse(savedStats); updateUI(); }
+    if (savedLogs) {
+      const parsedLogs = JSON.parse(savedLogs);
+      logs = parsedLogs.map(log => ({
+        ...log,
+        timestamp: new Date(log.timestamp)
+      }));
+      renderLogs();
+    }
+    if (savedStats) {
+      stats = JSON.parse(savedStats);
+      updateUI();
+    }
   }
 
-  // Save data (unchanged)
+  // Save data
   function saveData() {
     localStorage.setItem('pingerLogs', JSON.stringify(logs));
     localStorage.setItem('pingerStats', JSON.stringify(stats));
   }
 
-  // Add log entry (unchanged, with console)
+  // Add log entry
   function addLog(message, type = 'info', responseTime = null) {
     const timestamp = new Date();
     const log = { timestamp, message, type, responseTime };
@@ -107,16 +108,30 @@ function initializeApp() {
     renderLogs();
   }
 
-  // Render logs (unchanged)
+  // Render logs - FIXED version with defensive coding
   function renderLogs() {
+    if (!logContainer) return;
+
     logContainer.innerHTML = logs.map(log => {
-      const time = log.timestamp.toLocaleTimeString();
+      let timeString;
+      if (log.timestamp instanceof Date) {
+        timeString = log.timestamp.toLocaleTimeString();
+      } else if (log.timestamp) {
+        const dateObj = new Date(log.timestamp);
+        timeString = !isNaN(dateObj.getTime()) ? dateObj.toLocaleTimeString() : 'Invalid time';
+      } else {
+        timeString = 'No time';
+      }
+
       const responseInfo = log.responseTime ? ` (${log.responseTime}ms)` : '';
-      return `<div class="log-entry log-${log.type}"><span class="timestamp">[${time}]</span><span>${log.message}${responseInfo}</span></div>`;
+      return `<div class="log-entry log-${log.type}">
+        <span class="timestamp">[${timeString}]</span>
+        <span>${log.message}${responseInfo}</span>
+      </div>`;
     }).join('');
   }
 
-  // Update UI (unchanged)
+  // Update UI
   function updateUI() {
     totalPings.textContent = stats.total;
     successPings.textContent = stats.success;
@@ -131,24 +146,81 @@ function initializeApp() {
     if (stats.total > 0) {
       const successWidth = (stats.success / stats.total) * 100;
       uptimeBar.innerHTML = `<div class="uptime-segment uptime-success" style="width: ${successWidth}%"></div><div class="uptime-segment uptime-error" style="width: ${100 - successWidth}%"></div>`;
+    } else {
+      uptimeBar.innerHTML = `<div class="uptime-segment uptime-success" style="width: 100%"></div>`;
     }
     uptimeSuccess.textContent = stats.success;
     uptimeFailed.textContent = stats.failed;
   }
 
-  // Update next ping time (unchanged)
+  // Update next ping time
   function updateNextPing() {
-    const minutes = parseInt(intervalInput.value);
-    const nextTime = new Date(Date.now() + minutes * 60000);
-    nextPing.textContent = nextTime.toLocaleTimeString();
+    if (window.pingerIntervalId) {
+      const minutes = parseInt(intervalInput.value);
+      const nextTime = new Date(Date.now() + minutes * 60000);
+      nextPing.textContent = nextTime.toLocaleTimeString();
+    } else {
+      nextPing.textContent = '-';
+    }
   }
 
-  // Send email notification (unchanged—omitted for brevity, copy from previous if needed)
+  // Send email notification
+  async function sendEmailNotification(errorMessage) {
+    const email = emailInput.value.trim();
+    if (!email) return;
 
-  // Ping backend (unchanged, with console)
+    const emailService = emailServiceSelect.value;
+
+    if (emailService === 'mailto') {
+      const subject = encodeURIComponent('Backend Down Alert');
+      const body = encodeURIComponent(`Your backend at ${urlInput.value} is down!\n\nError: ${errorMessage}\nTime: ${new Date().toLocaleString()}`);
+      window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
+      addLog(`Opened email client to notify ${email}`, 'info');
+    } else if (emailService === 'resend') {
+      const apiKey = resendApiKeyInput.value.trim();
+      const fromEmail = fromEmailInput.value.trim() || 'onboarding@resend.dev';
+
+      if (!apiKey) {
+        addLog('Resend API key missing for email notification', 'warning');
+        return;
+      }
+
+      try {
+        const response = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            from: fromEmail,
+            to: [email],
+            subject: 'Backend Down Alert',
+            html: `<h1>Backend Down Alert</h1>
+                   <p>Your backend at ${urlInput.value} is down!</p>
+                   <p><strong>Error:</strong> ${errorMessage}</p>
+                   <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>`
+          })
+        });
+
+        if (response.ok) {
+          addLog(`Email alert sent to ${email}`, 'success');
+        } else {
+          addLog(`Failed to send email: ${response.statusText}`, 'error');
+        }
+      } catch (error) {
+        addLog(`Email send failed: ${error.message}`, 'error');
+      }
+    }
+  }
+
+  // Ping backend
   async function pingBackend() {
     const url = urlInput.value.trim();
-    if (!url) { addLog('No URL provided', 'error'); return; }
+    if (!url) {
+      addLog('No URL provided', 'error');
+      return;
+    }
     stats.total++;
     try {
       addLog(`Pinging ${url}...`, 'info');
@@ -156,7 +228,9 @@ function initializeApp() {
       const response = await fetch(url, { method: 'GET', mode: 'no-cors' });
       const responseTime = Date.now() - startTime;
       stats.responseTimes.push(responseTime);
-      if (stats.responseTimes.length > 100) { stats.responseTimes = stats.responseTimes.slice(-100); }
+      if (stats.responseTimes.length > 100) {
+        stats.responseTimes = stats.responseTimes.slice(-100);
+      }
       stats.success++;
       addLog(`Ping successful`, 'success', responseTime);
       console.log(`✅ Ping OK: ${url} in ${responseTime}ms`);
@@ -165,7 +239,7 @@ function initializeApp() {
       const errorMsg = error.message || 'Unknown error';
       addLog(`Ping failed: ${errorMsg}`, 'error');
       console.error(`❌ Ping FAIL: ${url} - ${errorMsg}`);
-      // await sendEmailNotification(errorMsg); // Uncomment if email setup
+      await sendEmailNotification(errorMsg);
     }
     lastPing.textContent = new Date().toLocaleTimeString();
     updateUI();
@@ -173,19 +247,83 @@ function initializeApp() {
     saveData();
   }
 
-  // Manual start (updated to use global interval, warn if auto-running)
+  // Export logs function
+  function exportLogs(range) {
+    let filteredLogs = [...logs];
+    const now = new Date();
+
+    switch(range) {
+      case '24h':
+        filteredLogs = logs.filter(log => (now - new Date(log.timestamp)) <= 24 * 60 * 60 * 1000);
+        break;
+      case '7d':
+        filteredLogs = logs.filter(log => (now - new Date(log.timestamp)) <= 7 * 24 * 60 * 60 * 1000);
+        break;
+      case '14d':
+        filteredLogs = logs.filter(log => (now - new Date(log.timestamp)) <= 14 * 24 * 60 * 60 * 1000);
+        break;
+      case '30d':
+        filteredLogs = logs.filter(log => (now - new Date(log.timestamp)) <= 30 * 24 * 60 * 60 * 1000);
+        break;
+      case '90d':
+        filteredLogs = logs.filter(log => (now - new Date(log.timestamp)) <= 90 * 24 * 60 * 60 * 1000);
+        break;
+      case '180d':
+        filteredLogs = logs.filter(log => (now - new Date(log.timestamp)) <= 180 * 24 * 60 * 60 * 1000);
+        break;
+      case '365d':
+        filteredLogs = logs.filter(log => (now - new Date(log.timestamp)) <= 365 * 24 * 60 * 60 * 1000);
+        break;
+      case 'all':
+        filteredLogs = [...logs];
+        break;
+    }
+
+    const exportData = filteredLogs.map(log => ({
+      timestamp: log.timestamp instanceof Date ? log.timestamp.toISOString() : log.timestamp,
+      type: log.type,
+      message: log.message,
+      responseTime: log.responseTime
+    }));
+
+    const dataStr = JSON.stringify(exportData, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+
+    const exportFileDefaultName = `pinger-logs-${range}-${new Date().toISOString()}.json`;
+
+    const linkElement = document.createElement('a');
+    linkElement.setAttribute('href', dataUri);
+    linkElement.setAttribute('download', exportFileDefaultName);
+    linkElement.click();
+
+    addLog(`Exported ${filteredLogs.length} logs for ${range}`, 'success');
+    exportModal.style.display = 'none';
+  }
+
+  // Create initState object
+  const initState = {
+    urlInput, intervalInput, startBtn, stopBtn, statusBanner, statusText,
+    addLog, updateNextPing, pingBackend
+  };
+
+  // Auto-start after 2s
+  setTimeout(() => autoStartPinger(initState), 2000);
+
+  // Manual start
   startBtn.addEventListener('click', () => {
     if (window.pingerIntervalId) {
-      addLog('Already auto-running—ignore or stop first', 'warning');
-      console.warn('Pinger already active');
+      addLog('Already running - monitoring is active', 'warning');
       return;
     }
     const url = urlInput.value.trim();
     const minutes = parseInt(intervalInput.value);
-    if (!url || minutes < 1 || minutes > 60) { alert('Invalid URL or interval'); return; }
+    if (!url || minutes < 1 || minutes > 60) {
+      addLog('Invalid URL or interval (must be 1-60 minutes)', 'error');
+      return;
+    }
     pingBackend();
     intervalId = setInterval(pingBackend, minutes * 60000);
-    window.pingerIntervalId = intervalId; // Sync global
+    window.pingerIntervalId = intervalId;
     startBtn.disabled = true;
     stopBtn.disabled = false;
     urlInput.disabled = true;
@@ -196,7 +334,7 @@ function initializeApp() {
     updateNextPing();
   });
 
-  // Manual stop (updated for global)
+  // Manual stop
   stopBtn.addEventListener('click', () => {
     if (intervalId) clearInterval(intervalId);
     if (window.pingerIntervalId) clearInterval(window.pingerIntervalId);
@@ -210,10 +348,61 @@ function initializeApp() {
     statusText.textContent = 'System Idle';
     nextPing.textContent = '-';
     addLog('Monitoring stopped', 'warning');
-    console.log('⏸ Stopped');
   });
 
-  // Other listeners (reset, clear, export—unchanged, omitted for brevity; copy from your original)
+  // Reset stats
+  resetBtn.addEventListener('click', () => {
+    if (window.pingerIntervalId) {
+      addLog('Please stop monitoring before resetting stats', 'warning');
+      return;
+    }
+
+    stats = { total: 0, success: 0, failed: 0, responseTimes: [] };
+    logs = [];
+    lastPing.textContent = 'Never';
+    updateUI();
+    renderLogs();
+    saveData();
+    addLog('All statistics and logs have been reset', 'info');
+  });
+
+  // Clear logs
+  clearLogsBtn.addEventListener('click', () => {
+    logs = [];
+    renderLogs();
+    saveData();
+    addLog('All logs cleared', 'info');
+  });
+
+  // Export button
+  exportBtn.addEventListener('click', () => {
+    if (exportModal) {
+      exportModal.style.display = 'flex';
+    }
+  });
+
+  // Close modal
+  closeModalBtn.addEventListener('click', () => {
+    if (exportModal) {
+      exportModal.style.display = 'none';
+    }
+  });
+
+  // Close modal when clicking outside
+  window.addEventListener('click', (e) => {
+    if (exportModal && e.target === exportModal) {
+      exportModal.style.display = 'none';
+    }
+  });
+
+  // Export option clicks
+  const exportOptions = document.querySelectorAll('.export-option');
+  exportOptions.forEach(option => {
+    option.addEventListener('click', () => {
+      const range = option.getAttribute('data-range');
+      exportLogs(range);
+    });
+  });
 
   // Initialize
   loadData();
