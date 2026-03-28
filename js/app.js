@@ -3,7 +3,7 @@ window.addEventListener('load', function() {
   initializeApp();
 });
 
-// GLOBAL: Auto-start function (ADD THIS FUNCTION)
+// GLOBAL: Auto-start function
 function autoStartPinger(initializeState) {
   // Use passed state to avoid re-init
   const { urlInput, intervalInput, startBtn, stopBtn, statusBanner, statusText, addLog, updateNextPing, pingBackend } = initializeState;
@@ -33,6 +33,106 @@ function autoStartPinger(initializeState) {
   addLog(`🚀 Auto-ping started - Keeping ${url} awake every ${minutes} min`, 'success');
   console.log(`🚀 Auto-ping started: ${url} every ${minutes} min`);
   updateNextPing();
+}
+
+// Helper function to convert logs to CSV
+function convertToCSV(logs) {
+  const headers = ['Timestamp', 'Type', 'Message', 'Response Time (ms)'];
+  const rows = logs.map(log => {
+    const timestamp = log.timestamp instanceof Date ? log.timestamp.toLocaleString() : new Date(log.timestamp).toLocaleString();
+    const type = log.type;
+    const message = log.message;
+    const responseTime = log.responseTime || '';
+
+    // Escape commas and quotes for CSV
+    const escapeCSV = (str) => {
+      if (str === undefined || str === null) return '';
+      const string = String(str);
+      if (string.includes(',') || string.includes('"') || string.includes('\n')) {
+        return `"${string.replace(/"/g, '""')}"`;
+      }
+      return string;
+    };
+
+    return [timestamp, type, message, responseTime].map(escapeCSV).join(',');
+  });
+
+  return [headers.join(','), ...rows].join('\n');
+}
+
+// Helper function to convert logs to PDF
+async function convertToPDF(logs, range) {
+  // Create PDF using jsPDF
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF('landscape');
+
+  // Add title
+  doc.setFontSize(20);
+  doc.setTextColor(99, 102, 241);
+  doc.text('Backend Pinger Pro - Export Report', 20, 20);
+
+  doc.setFontSize(12);
+  doc.setTextColor(100, 100, 100);
+  doc.text(`Export Range: ${range}`, 20, 30);
+  doc.text(`Export Date: ${new Date().toLocaleString()}`, 20, 36);
+  doc.text(`Total Logs: ${logs.length}`, 20, 42);
+
+  // Add summary statistics
+  const successLogs = logs.filter(log => log.type === 'success').length;
+  const errorLogs = logs.filter(log => log.type === 'error').length;
+  const warningLogs = logs.filter(log => log.type === 'warning').length;
+  const infoLogs = logs.filter(log => log.type === 'info').length;
+
+  doc.setFontSize(10);
+  doc.setTextColor(0, 0, 0);
+  doc.text(`✅ Successful: ${successLogs}`, 20, 52);
+  doc.text(`❌ Errors: ${errorLogs}`, 20, 58);
+  doc.text(`⚠️ Warnings: ${warningLogs}`, 20, 64);
+  doc.text(`ℹ️ Info: ${infoLogs}`, 20, 70);
+
+  // Prepare table data
+  const tableData = logs.map(log => {
+    const timestamp = log.timestamp instanceof Date ? log.timestamp.toLocaleString() : new Date(log.timestamp).toLocaleString();
+    const type = log.type.toUpperCase();
+    const message = log.message.length > 60 ? log.message.substring(0, 57) + '...' : log.message;
+    const responseTime = log.responseTime ? `${log.responseTime}ms` : '-';
+    return [timestamp, type, message, responseTime];
+  });
+
+  // Add table
+  doc.autoTable({
+    head: [['Timestamp', 'Type', 'Message', 'Response Time']],
+    body: tableData,
+    startY: 80,
+    theme: 'striped',
+    headStyles: {
+      fillColor: [99, 102, 241],
+      textColor: 255,
+      fontSize: 10,
+      fontStyle: 'bold'
+    },
+    bodyStyles: {
+      fontSize: 8
+    },
+    columnStyles: {
+      0: { cellWidth: 60 },
+      1: { cellWidth: 30 },
+      2: { cellWidth: 150 },
+      3: { cellWidth: 40 }
+    },
+    margin: { left: 20, right: 20 }
+  });
+
+  // Add footer with page numbers
+  const pageCount = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text(`Page ${i} of ${pageCount}`, doc.internal.pageSize.width - 30, doc.internal.pageSize.height - 10);
+  }
+
+  return doc;
 }
 
 // Main init function
@@ -247,8 +347,13 @@ function initializeApp() {
     saveData();
   }
 
-  // Export logs function
-  function exportLogs(range) {
+  // Export logs function with multiple formats
+  async function exportLogs(range) {
+    // Get selected format
+    const formatRadio = document.querySelector('input[name="exportFormat"]:checked');
+    const format = formatRadio ? formatRadio.value : 'json';
+
+    // Filter logs based on range
     let filteredLogs = [...logs];
     const now = new Date();
 
@@ -279,25 +384,63 @@ function initializeApp() {
         break;
     }
 
-    const exportData = filteredLogs.map(log => ({
-      timestamp: log.timestamp instanceof Date ? log.timestamp.toISOString() : log.timestamp,
-      type: log.type,
-      message: log.message,
-      responseTime: log.responseTime
-    }));
+    if (filteredLogs.length === 0) {
+      addLog('No logs to export for the selected range', 'warning');
+      exportModal.style.display = 'none';
+      return;
+    }
 
-    const dataStr = JSON.stringify(exportData, null, 2);
-    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+    // Export based on format
+    const fileName = `pinger-logs-${range}-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}`;
 
-    const exportFileDefaultName = `pinger-logs-${range}-${new Date().toISOString()}.json`;
+    try {
+      if (format === 'json') {
+        // JSON Export
+        const exportData = filteredLogs.map(log => ({
+          timestamp: log.timestamp instanceof Date ? log.timestamp.toISOString() : log.timestamp,
+          type: log.type,
+          message: log.message,
+          responseTime: log.responseTime
+        }));
 
-    const linkElement = document.createElement('a');
-    linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', exportFileDefaultName);
-    linkElement.click();
+        const dataStr = JSON.stringify(exportData, null, 2);
+        const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
 
-    addLog(`Exported ${filteredLogs.length} logs for ${range}`, 'success');
-    exportModal.style.display = 'none';
+        const linkElement = document.createElement('a');
+        linkElement.setAttribute('href', dataUri);
+        linkElement.setAttribute('download', `${fileName}.json`);
+        linkElement.click();
+
+        addLog(`Exported ${filteredLogs.length} logs as JSON for ${range}`, 'success');
+
+      } else if (format === 'csv') {
+        // CSV Export
+        const csvData = convertToCSV(filteredLogs);
+        const dataUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csvData);
+
+        const linkElement = document.createElement('a');
+        linkElement.setAttribute('href', dataUri);
+        linkElement.setAttribute('download', `${fileName}.csv`);
+        linkElement.click();
+
+        addLog(`Exported ${filteredLogs.length} logs as CSV for ${range}`, 'success');
+
+      } else if (format === 'pdf') {
+        // PDF Export - Show loading message
+        addLog(`Generating PDF for ${filteredLogs.length} logs...`, 'info');
+
+        const doc = await convertToPDF(filteredLogs, range);
+        doc.save(`${fileName}.pdf`);
+
+        addLog(`Exported ${filteredLogs.length} logs as PDF for ${range}`, 'success');
+      }
+
+      exportModal.style.display = 'none';
+
+    } catch (error) {
+      console.error('Export error:', error);
+      addLog(`Export failed: ${error.message}`, 'error');
+    }
   }
 
   // Create initState object
